@@ -1,4 +1,5 @@
 #include "redismodule.h"
+#include <string.h>
 
 #define DEGRADING_COUNTER_TYPE_NAME "DeGrad-TB"
 #define DEGRADING_COUNTER_ENCODING_VERSION 0
@@ -18,7 +19,7 @@ typedef struct DegradingCounterData {
     double degrades_at; // How much should the counter degrade after an increment has passed. e.g. 1 every millisecond, or .5 every minute.
     int number_of_increments; // How many increments should elapse before degrading the counter? Defaults to 1.
     CounterIncrements increment; // Which time increment should be used to degrade the counter?
-    double value; // What is accumulated value of the counter? This will be a raw "undegraded" number. Only increments and decrements apply here.
+    double value; // What is accumulated value of the counter? This will be a raw "un-degraded" number. Only increments and decrements apply here.
 } DegradingCounterData;
 
 double DegradingCounter_ComputeMilliseconds(const DegradingCounterData *counter) {
@@ -33,12 +34,136 @@ double DegradingCounter_ComputeMinutes(const DegradingCounterData *counter) {
     return 0;
 }
 
+int DegradingCounter_ParseIntervalString(const char *interval_str, int *number_of_increments, CounterIncrements *unit) {
+    char unit_str[4]; // This will hold the `min`, `sec`, `ms` component of the interval string.
+
+    if (sscanf(interval_str, "%d%4s", &number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
+        // TODO: Maybe start caring?
+        return -1;
+    }
+
+    if (strcmp(unit_str, "ms") == 0) {
+        *unit = Milliseconds;
+        return 0;
+    }
+
+    if (strcmp(unit_str, "sec") == 0) {
+        *unit = Seconds;
+        return 0;
+    }
+
+    if (strcmp(unit_str, "min") == 0) {
+        *unit = Minutes;
+        return 0;
+    }
+
+    // We made it here, the input must have been invalid. We'll leave it to the caller to say why and report the error.
+    return -1;
+}
+
+// Create a struct of type DegradingCounterData and populate it from the arguments passed into the Redis command.
+DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* ctx, RedisModuleString **argv) {
+    // This method is intended to be called from within a context that has already checked the number of arguments.
+
+    // Let's start by having Redis allocate enough memory for us to store would DegradingCounterData struct. Allocating
+    // the memory this way let's Redis correctly report how much memory it's using.
+    // TODO: Check to ensure that the memory was allocated successfully.
+    DegradingCounterData *degrading_counter_data = RedisModule_Alloc(sizeof(DegradingCounterData));
+
+    // Now that the memory for the degrading_counter_data struct instance is allocated we'll go and parse the arguments and
+    // hopefully return a pointer to the struct containing the data we want to work with.
+
+    // I don't think we should require the arguments to be in a specific order, as long as everything is provided it should
+    // be fine. So we'll loop over the arguments, which should have already been validated to ensure that exact six
+    // were provided.
+    // TODO: Should make sure AMOUNT, DEGRADE_RATE, and INTERVAL were each passed in.
+    for (int i = 2; i < 6; i += 2) { // Adding two so that the next index will reference a name.
+        size_t arg_len;
+        const char *arg_name = RedisModule_StringPtrLen(argv[i], &arg_len); // Doesn't need to be freed as it's handled by Redis.
+
+        // Check AMOUNT
+        if (strcmp(arg_name, "AMOUNT") == 0) {
+            if (RedisModule_StringToDouble(argv[i + 1], &degrading_counter_data->value) != REDISMODULE_OK) {
+                RedisModule_ReplyWithError(ctx, "ERR invalid value for AMOUNT: must be a signed double.");
+                RedisModule_Free(degrading_counter_data);
+                return NULL;
+            }
+        }
+
+        // Check DEGRADE_RATE
+        else if (strcmp(arg_name, "DEGRADE_RATE") == 0) {
+            if (RedisModule_StringToDouble(argv[i + 1], &degrading_counter_data->degrades_at) != REDISMODULE_OK) {
+                RedisModule_ReplyWithError(ctx, "ERR invalid value for DEGRADE_RATE: must be a signed double.");
+                RedisModule_Free(degrading_counter_data);
+                return NULL;
+            }
+        }
+
+        // Check INTERVAL
+        else if (strcmp(arg_name, "INTERVAL") == 0) {
+            size_t interval_len;
+            const char *interval_str = RedisModule_StringPtrLen(argv[i + 1], &interval_len);
+
+            if (DegradingCounter_ParseIntervalString(interval_str,
+                                                     &degrading_counter_data->number_of_increments,
+                                                     &degrading_counter_data->increment) != 0) {
+
+                RedisModule_ReplyWithErrorFormat(ctx, "Err invalid value for INTERVAL: %s", interval_str);
+                RedisModule_Free(degrading_counter_data);
+                return NULL;
+            }
+        }
+
+        // Got something else...
+        else {
+            RedisModule_Free(degrading_counter_data); // This is in a bad state, and we don't need it.
+            RedisModule_ReplyWithErrorFormat(ctx, "ERR unexpected argument: %s. (Remember argument names are case sensitive.)", arg_name);
+
+            return NULL; // There is nothing to return. This will be handled by the caller.
+        }
+    }
+
+    // We've made it this far... I'm assuming that there are no issues so we're going to return the pointer to the
+    // caller, where we expect the instance of the struct to be used and then freed.
+    return degrading_counter_data;
+}
+
 // ------- Commands
 
 // Increment counter (DC.INCR): Create counter if it doesn't exist increment by specified amount of values if it does.
 //                    Gonna set the rest of the properties.
+
+// DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 30min
 int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    return REDISMODULE_OK;
+    // TODO: Make some of these arguments optional.
+    RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
+
+    // For now all arguments are required, we'll pass back an error in the event that 6 arguments weren't
+    // passed in.
+    if (argc != 6) {
+        return RedisModule_WrongArity(ctx);
+    }
+
+    // Get the key from the argument list.
+    RedisModuleString *key_name = argv[1];
+
+    // Get a reference to the actual Redis key handle.
+    RedisModuleKey *key = RedisModule_OpenKey(ctx, key_name, REDISMODULE_READ|REDISMODULE_WRITE);
+
+    // Get the key type, this will tell us if the key we are working with is already set or not.
+    const int key_type = RedisModule_KeyType(key);
+
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
+        // We have a new key here. Let's persist and return the starting value.
+        return REDISMODULE_OK;
+    } else if (RedisModule_ModuleTypeGetType(key) != DegradingCounter) {
+        // The wrong type of key was specified so we're bailing out with a wrong type error message.
+        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    } else {
+        // The key exists, and it's the correct type, let's increment the value by whatever was passed in and then
+        // return the computed counter.
+        return REDISMODULE_OK;
+    }
 }
 
 // Decrement counter (DC.DECR): Provide a way for a user to decrement a counter.
