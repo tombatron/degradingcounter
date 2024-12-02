@@ -22,38 +22,63 @@ typedef struct DegradingCounterData {
     double value; // What is accumulated value of the counter? This will be a raw "un-degraded" number. Only increments and decrements apply here.
 } DegradingCounterData;
 
-double DegradingCounter_ComputeMilliseconds(const DegradingCounterData *counter) {
-    return 0;
+double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
+    // Get current time stamp.
+    const ustime_t current_time_ms = RedisModule_Milliseconds();
+
+    // Compute the difference. This will give us our age.
+    const ustime_t age = current_time_ms - counter->created;
+
+    // Determine units per increment.
+    long long units_per_increment = 0;
+
+    switch (counter->increment) {
+        case Milliseconds:
+            units_per_increment = 1;
+            break;
+
+        case Seconds:
+            units_per_increment = 1000;
+            break;
+
+        case Minutes:
+            units_per_increment = 60000;
+            break;
+    }
+
+    // Compute the number of increments by dividing the age.
+    long long number_of_increments = age / units_per_increment;
+
+    // Multiply the number of increments by how fast the counter is degrading to figure out degradation.
+    double degredation = (double)number_of_increments * counter->degrades_at;
+
+    // Subtract the degradation from the value.
+    const double degraded_value = counter->value - degredation;
+
+    // Return the result.
+    return degraded_value;
 }
 
-double DegradingCounter_ComputeSeconds(const DegradingCounterData *counter) {
-    return 0;
-}
-
-double DegradingCounter_ComputeMinutes(const DegradingCounterData *counter) {
-    return 0;
-}
-
-int DegradingCounter_ParseIntervalString(const char *interval_str, int *number_of_increments, CounterIncrements *unit) {
+int DegradingCounter_ParseIntervalString(const char *interval_str, int &number_of_increments, CounterIncrements &unit) {
     char unit_str[4]; // This will hold the `min`, `sec`, `ms` component of the interval string.
 
-    if (sscanf(interval_str, "%d%4s", &number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
+    if (sscanf(interval_str, "%d%4s", number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
         // TODO: Maybe start caring?
         return -1;
     }
 
     if (strcmp(unit_str, "ms") == 0) {
-        *unit = Milliseconds;
+        unit = Milliseconds;
         return 0;
     }
 
     if (strcmp(unit_str, "sec") == 0) {
-        *unit = Seconds;
+        unit = Seconds;
         return 0;
     }
 
     if (strcmp(unit_str, "min") == 0) {
-        *unit = Minutes;
+        unit = Minutes;
         return 0;
     }
 
@@ -81,7 +106,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
         size_t arg_len;
         const char *arg_name = RedisModule_StringPtrLen(argv[i], &arg_len); // Doesn't need to be freed as it's handled by Redis.
 
-        // Check AMOUNT
+        // Check `AMOUNT`
         if (strcmp(arg_name, "AMOUNT") == 0) {
             if (RedisModule_StringToDouble(argv[i + 1], &degrading_counter_data->value) != REDISMODULE_OK) {
                 RedisModule_ReplyWithError(ctx, "ERR invalid value for AMOUNT: must be a signed double.");
@@ -90,7 +115,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
             }
         }
 
-        // Check DEGRADE_RATE
+        // Check `DEGRADE_RATE`
         else if (strcmp(arg_name, "DEGRADE_RATE") == 0) {
             if (RedisModule_StringToDouble(argv[i + 1], &degrading_counter_data->degrades_at) != REDISMODULE_OK) {
                 RedisModule_ReplyWithError(ctx, "ERR invalid value for DEGRADE_RATE: must be a signed double.");
@@ -99,14 +124,14 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
             }
         }
 
-        // Check INTERVAL
+        // Check `INTERVAL`
         else if (strcmp(arg_name, "INTERVAL") == 0) {
             size_t interval_len;
             const char *interval_str = RedisModule_StringPtrLen(argv[i + 1], &interval_len);
 
             if (DegradingCounter_ParseIntervalString(interval_str,
-                                                     &degrading_counter_data->number_of_increments,
-                                                     &degrading_counter_data->increment) != 0) {
+                                                     degrading_counter_data->number_of_increments,
+                                                     degrading_counter_data->increment) != 0) {
 
                 RedisModule_ReplyWithErrorFormat(ctx, "Err invalid value for INTERVAL: %s", interval_str);
                 RedisModule_Free(degrading_counter_data);
@@ -153,17 +178,47 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
     // Get the key type, this will tell us if the key we are working with is already set or not.
     const int key_type = RedisModule_KeyType(key);
 
-    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
-        // We have a new key here. Let's persist and return the starting value.
-        return REDISMODULE_OK;
-    } else if (RedisModule_ModuleTypeGetType(key) != DegradingCounter) {
+    // Let's make sure we're dealing with the correct kind of key first.
+    if (key_type != REDISMODULE_KEYTYPE_EMPTY &&
+        RedisModule_ModuleTypeGetType(key) != DegradingCounter) {
         // The wrong type of key was specified so we're bailing out with a wrong type error message.
         return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
-    } else {
-        // The key exists, and it's the correct type, let's increment the value by whatever was passed in and then
-        // return the computed counter.
-        return REDISMODULE_OK;
     }
+
+    // Next, if possible, let's parse the args passed into the Redis command and see what we have.
+    DegradingCounterData *degrading_counter_data = GetDegradingCounterDataFromRedisArguments(ctx, argv);
+
+    // If `degrading_counter_data` is NULL here, there was an error parsing the values and we should just bail out.
+    if (degrading_counter_data == NULL) {
+        // All we have to do is return an error here, the error has already been sent to the caller.
+        return REDISMODULE_ERR;
+    }
+
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
+        // We have a new key here. Let's persist and return the starting value.
+        RedisModule_ModuleTypeSetValue(key, DegradingCounter, degrading_counter_data);
+
+        // We're just going to return the initial value on first save.
+        RedisModule_ReplyWithDouble(ctx, degrading_counter_data->value);
+    } else {
+        // We have an existing key, let's get access to it.
+        DegradingCounterData *stored_degrading_counter_data = RedisModule_ModuleTypeGetValue(key);
+
+        // We pull a reference to the memory that is holding our existing key and increment the `value` property by the
+        // amount from the passed in argument.
+        stored_degrading_counter_data->value += degrading_counter_data->value;
+
+        // Next, let's compute how much of our counter has degraded.
+        const double degraded_counter_value = DegradingCounter_Compute_Value(stored_degrading_counter_data);
+
+        // Finally, return the degraded counter value.
+        RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
+    }
+
+    // Mark the key ready to replicate to secondaries or to an AOF file...
+    RedisModule_ReplicateVerbatim(ctx);
+
+    return REDISMODULE_OK;
 }
 
 // Decrement counter (DC.DECR): Provide a way for a user to decrement a counter.
