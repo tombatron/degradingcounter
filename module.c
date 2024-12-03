@@ -261,7 +261,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
     }
 
-    // The key doesn't exist at all so...
+    // Does the key even exist?
     if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
         return RedisModule_ReplyWithNull(ctx);
     }
@@ -308,7 +308,44 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 
 // Peek counter (DC.PEEK): look at the current value of the counter without incrementing it.
 int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    return REDISMODULE_OK;
+    RedisModule_AutoMemory(ctx);
+
+    if (argc != 2) { // We need a command name, obviously, but we also need a key name.
+        return RedisModule_WrongArity(ctx);
+    }
+
+    // Get the key from the argument list.
+    RedisModuleString *key_name = argv[1];
+
+    // Get a reference to the actual Redis key handle.
+    RedisModuleKey *key = RedisModule_OpenKey(ctx, key_name, REDISMODULE_READ);
+
+    // Get the key type, this will let us know if we're dealing with an empty or invalid key.
+    const int key_type = RedisModule_KeyType(key);
+
+    // Make sure the key is valid...
+    if (key_type != REDISMODULE_KEYTYPE_EMPTY &&
+        RedisModule_ModuleTypeGetType(key) != DegradingCounter) {
+        // Wrong kind of key, let's bail and tell the user about it.
+        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+
+    // Does the key even exist?
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
+        return RedisModule_ReplyWithNull(ctx);
+    }
+
+    // We've made it this far, I guess we can assume that the key is valid and that we can proceed.
+    DegradingCounterData *stored_degraded_counter_data = RedisModule_ModuleTypeGetValue(key);
+
+    // Let's compute the current value of the counter.
+    const double current_decremented_value = DegradingCounter_Compute_Value(stored_degraded_counter_data);
+
+    if (current_decremented_value == 0) { // The counter value is at zero so we're going to get rid of it.
+        RedisModule_UnlinkKey(key);
+    }
+
+    return RedisModule_ReplyWithDouble(ctx, current_decremented_value);
 }
 
 // ------- Native Type Callbacks.
