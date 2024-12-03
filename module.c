@@ -1,9 +1,14 @@
 #include "redismodule.h"
 #include <string.h>
+#include <math.h>
 
 #define DEGRADING_COUNTER_TYPE_NAME "DeGrad-TB"
 #define DEGRADING_COUNTER_ENCODING_VERSION 0
 #define DEGRADING_COUNTER_MODULE_VERSION 1
+
+#define MILLISECONDS_PER_MILLISECOND 1 // Hehe.
+#define MILLISECONDS_PER_SECOND 1000
+#define MILLISECONDS_PER_MINUTE 60000
 
 // This is a static global pointer to the custom type defined for the degrading counter.
 static RedisModuleType *DegradingCounter;
@@ -22,38 +27,45 @@ typedef struct DegradingCounterData {
     double value; // What is accumulated value of the counter? This will be a raw "un-degraded" number. Only increments and decrements apply here.
 } DegradingCounterData;
 
+// This method will compute the degraded value of the counter.
 double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
     // Get current time stamp.
     const ustime_t current_time_ms = RedisModule_Milliseconds();
 
     // Compute the difference. This will give us our age.
-    const ustime_t age = current_time_ms - counter->created;
+    const ustime_t age_in_milliseconds = current_time_ms - counter->created;
 
     // Determine units per increment.
     long long units_per_increment = 0;
 
     switch (counter->increment) {
         case Milliseconds:
-            units_per_increment = 1;
+            units_per_increment = MILLISECONDS_PER_MILLISECOND;
             break;
 
         case Seconds:
-            units_per_increment = 1000;
+            units_per_increment = MILLISECONDS_PER_SECOND;
             break;
 
         case Minutes:
-            units_per_increment = 60000;
+            units_per_increment = MILLISECONDS_PER_MINUTE;
             break;
+
+        default:
+            // Not sure how we got here, but we should just leave immediately.
+            return 0;
     }
 
+    // TODO: Add in some checks to ensure that we're not overflowing anywhere.
+
     // Compute the number of increments by dividing the age.
-    long long number_of_increments = age / units_per_increment;
+    const long long number_of_increments = age_in_milliseconds / units_per_increment;
 
     // Multiply the number of increments by how fast the counter is degrading to figure out degradation.
-    double degredation = (double)number_of_increments * counter->degrades_at;
+    const double degradation = (double)number_of_increments * counter->degrades_at;
 
-    // Subtract the degradation from the value.
-    const double degraded_value = counter->value - degredation;
+    // Subtract the degradation from the value. Clamp the value at zero.
+    const double degraded_value = fmax(0, counter->value - degradation);
 
     // Return the result.
     return degraded_value;
@@ -207,6 +219,9 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         // We pull a reference to the memory that is holding our existing key and increment the `value` property by the
         // amount from the passed in argument.
         stored_degrading_counter_data->value += degrading_counter_data->value;
+
+        // TODO: If the result of the above operation results in a value that is less than or equal to zero then we
+        //       should go ahead and remove the key from the keyspace.
 
         // Next, let's compute how much of our counter has degraded.
         const double degraded_counter_value = DegradingCounter_Compute_Value(stored_degrading_counter_data);
