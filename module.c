@@ -357,7 +357,15 @@ void *DegradingCounterRDBLoad(RedisModuleIO *io, int encver) {
 
 // Provided as the `rdb_save` callback for our data type.
 void *DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
+    const DegradingCounterData *degrading_counter_data = ptr;
 
+    RedisModule_SaveSigned(io, degrading_counter_data->created);
+    RedisModule_SaveDouble(io, degrading_counter_data->degrades_at);
+    RedisModule_SaveSigned(io, degrading_counter_data->number_of_increments);
+    RedisModule_SaveSigned(io, degrading_counter_data->increment);
+    RedisModule_SaveDouble(io, degrading_counter_data->value);
+
+    return REDISMODULE_OK;
 }
 
 // Provided as the `aof_rewrite` callback for our data type.
