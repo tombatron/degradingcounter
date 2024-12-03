@@ -71,10 +71,30 @@ double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
     return degraded_value;
 }
 
+char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counter) {
+    char* buffer = RedisModule_Alloc(25);
+
+    switch (counter->increment) {
+        case Milliseconds:
+            snprintf(buffer, sizeof(buffer), "%dms", counter->number_of_increments);
+            break;
+        case Seconds:
+            snprintf(buffer, sizeof(buffer), "%dsec", counter->number_of_increments);
+            break;
+        case Minutes:
+            snprintf(buffer, sizeof(buffer), "%dmin", counter->number_of_increments);
+            break;
+        default:
+            return NULL;
+    }
+
+    return buffer;
+}
+
 int DegradingCounter_ParseIntervalString(const char *interval_str, int &number_of_increments, CounterIncrements &unit) {
     char unit_str[4]; // This will hold the `min`, `sec`, `ms` component of the interval string.
 
-    if (sscanf(interval_str, "%d%4s", number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
+    if (sscanf(interval_str, "%d%4s", &number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
         // TODO: Maybe start caring?
         return -1;
     }
@@ -370,7 +390,7 @@ void *DegradingCounterRDBLoad(RedisModuleIO *io, int encver) {
 }
 
 // Provided as the `rdb_save` callback for our data type.
-void *DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
+void *DegradingCounterRDBSave(RedisModuleIO *io, const void *ptr) {
     const DegradingCounterData *degrading_counter_data = ptr;
 
     RedisModule_SaveSigned(io, degrading_counter_data->created);
@@ -383,8 +403,21 @@ void *DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
 }
 
 // Provided as the `aof_rewrite` callback for our data type.
-void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
+void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, const void *value) {
+    const DegradingCounterData *degrading_counter_data = value;
 
+    // Call out to the DegradingCounter_Create_Interval_String method to formulate the command string. This method
+    // allocates memory for the string, to be sure and free that memory after we're done here.
+    char* interval_string = DegradingCounter_Create_Interval_String(degrading_counter_data);
+
+    RedisModule_EmitAOF(aof, "DC.INCR", "",
+                        key,
+                        "AMOUNT", degrading_counter_data->value,
+                        "DEGRADE_RATE", degrading_counter_data->degrades_at,
+                        "INTERVAL", interval_string);
+
+    // Up where we set the interval_string variable we allocated some memory, so here we are freeing that memory...
+    RedisModule_Free(interval_string);
 }
 
 // Provided as the `free` callback for our data type.
