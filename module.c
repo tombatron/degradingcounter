@@ -177,7 +177,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 
     // For now all arguments are required, we'll pass back an error in the event that 6 arguments weren't
     // passed in.
-    if (argc != 6) {
+    if (argc != 8) { // 6 user supplied arguments, plus two more for the command name and key name.
         return RedisModule_WrongArity(ctx);
     }
 
@@ -237,8 +237,73 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 }
 
 // Decrement counter (DC.DECR): Provide a way for a user to decrement a counter.
+// DC.DECR test_counter 1
 int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    return REDISMODULE_OK;
+    RedisModule_AutoMemory(ctx);
+
+    if (argc > 3) { // 1 optional user supplied argument, plus the command name and the key name.
+        return RedisModule_WrongArity(ctx);
+    }
+
+    // Get the key from the argument list.
+    RedisModuleString *key_name = argv[1];
+
+    // Get a reference to the actual Redis key handle.
+    RedisModuleKey *key = RedisModule_OpenKey(ctx, key_name, REDISMODULE_READ|REDISMODULE_WRITE);
+
+    // Get the key type, this will tell us if the key we are working with is already set or not.
+    const int key_type = RedisModule_KeyType(key);
+
+    // Make sure that we're dealing with the correct kind key here.
+    if (key_type != REDISMODULE_KEYTYPE_EMPTY &&
+        RedisModule_ModuleTypeGetType(key) != DegradingCounter) {
+        // The wrong type of key was specified so we're bailing out with a wrong type error message.
+        return RedisModule_ReplyWithError(ctx, REDISMODULE_ERRORMSG_WRONGTYPE);
+    }
+
+    // The key doesn't exist at all so...
+    if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
+        return RedisModule_ReplyWithNull(ctx);
+    }
+
+    double decrement_amount;
+
+    // If we have three arguments we're assuming that the user isn't using the default value.
+    if (argc == 3) {
+        if (RedisModule_StringToDouble(argv[2], &decrement_amount) != REDISMODULE_OK) {
+            // We were passed a bad value, bail!
+            RedisModule_ReplyWithError(ctx, "ERR invalid value for decrement: must be a number.");
+            return REDISMODULE_ERR;
+        }
+    }
+    // We didn't get a third argument, so we're assuming that the user is using the default value.
+    else {
+        decrement_amount = 1;
+    }
+
+    // Let's go ahead and get the counter from memory.
+    DegradingCounterData *stored_degrading_counter_data = RedisModule_ModuleTypeGetValue(key);
+
+    // Decrement the value, clamping at zero.
+    double decremented_final_value = fmax(0, stored_degrading_counter_data->value - decrement_amount);
+
+    // If decremented_final_value is 0, we're deleting the key.
+    if (decremented_final_value == 0) {
+        RedisModule_UnlinkKey(key); // The value can't degrade anymore so we'll remove the method.
+    }
+    // Otherwise we update the value in memory.
+    else {
+        // Update the stored value.
+        stored_degrading_counter_data->value = decremented_final_value;
+
+        // We've decremented the value, now we have to compute.
+        decremented_final_value = DegradingCounter_Compute_Value(stored_degrading_counter_data);
+    }
+
+    // Mark the key ready to replicate to secondaries or to an AOF file...
+    RedisModule_ReplicateVerbatim(ctx);
+
+    return RedisModule_ReplyWithDouble(ctx, decremented_final_value);
 }
 
 // Peek counter (DC.PEEK): look at the current value of the counter without incrementing it.
