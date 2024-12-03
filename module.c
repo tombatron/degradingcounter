@@ -352,7 +352,21 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
 
 // Provided as the `rdb_load` callback for our data type.
 void *DegradingCounterRDBLoad(RedisModuleIO *io, int encver) {
+    // First we have to check if the encoding is the correct version.
+    if (encver != DEGRADING_COUNTER_ENCODING_VERSION) {
+        // TODO: Log an error here.
+        return NULL;
+    }
 
+    DegradingCounterData *degrading_counter = RedisModule_Alloc(sizeof(DegradingCounterData));
+
+    degrading_counter->created = RedisModule_LoadSigned(io);
+    degrading_counter->degrades_at = RedisModule_LoadDouble(io);
+    degrading_counter->number_of_increments = (int)RedisModule_LoadSigned(io);
+    degrading_counter->increment = RedisModule_LoadSigned(io);
+    degrading_counter->value = RedisModule_LoadDouble(io);
+
+    return degrading_counter;
 }
 
 // Provided as the `rdb_save` callback for our data type.
