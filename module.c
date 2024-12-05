@@ -27,6 +27,10 @@ typedef struct DegradingCounterData {
     double value; // What is accumulated value of the counter? This will be a raw "un-degraded" number. Only increments and decrements apply here.
 } DegradingCounterData;
 
+int is_approximately_zero(const double value, const double epsilon) {
+    return fabs(value) < epsilon;
+}
+
 // This method will compute the degraded value of the counter.
 double DegradingCounter_Compute_Value(RedisModuleCtx *ctx, const DegradingCounterData *counter) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounter_Compute_Value");
@@ -254,18 +258,31 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         // We have an existing key, let's get access to it.
         DegradingCounterData *stored_degrading_counter_data = RedisModule_ModuleTypeGetValue(key);
 
-        // We pull a reference to the memory that is holding our existing key and increment the `value` property by the
-        // amount from the passed in argument.
-        stored_degrading_counter_data->value += degrading_counter_data->value;
+        // Next we'll check to see if the computed value of the existing key is zero.
+        const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
 
-        // TODO: If the result of the above operation results in a value that is less than or equal to zero then we
-        //       should go ahead and remove the key from the keyspace.
+        if (is_approximately_zero(current_decremented_value, 0.001)) {
+            // The existing counter at this key is zero, so we'll just push the value from the provided arguments in
+            // and return...
+            *stored_degrading_counter_data = *degrading_counter_data;
 
-        // Next, let's compute how much of our counter has degraded.
-        const double degraded_counter_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
+            RedisModule_ReplyWithDouble(ctx, stored_degrading_counter_data->value);
+        }
+        // The existing counter isn't done so we'll continue to work with it.
+        else {
+            // We pull a reference to the memory that is holding our existing key and increment the `value` property by the
+            // amount from the passed in argument.
+            stored_degrading_counter_data->value += degrading_counter_data->value;
 
-        // Finally, return the degraded counter value.
-        RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
+            // TODO: If the result of the above operation results in a value that is less than or equal to zero then we
+            //       should go ahead and remove the key from the keyspace.
+
+            // Next, let's compute how much of our counter has degraded.
+            const double degraded_counter_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
+
+            // Finally, return the degraded counter value.
+            RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
+        }
     }
 
     // Mark the key ready to replicate to secondaries or to an AOF file...
