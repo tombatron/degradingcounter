@@ -44,17 +44,17 @@ double DegradingCounter_Compute_Value(const DegradingCounterData *counter, Redis
 
     switch (counter->increment) {
         case Milliseconds:
-            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Milliseconds");
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "units_per_increment: Milliseconds");
             units_per_increment = MILLISECONDS_PER_MILLISECOND;
             break;
 
         case Seconds:
-            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Seconds");
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "units_per_increment: Seconds");
             units_per_increment = MILLISECONDS_PER_SECOND;
             break;
 
         case Minutes:
-            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Minutes");
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "units_per_increment: Minutes");
             units_per_increment = MILLISECONDS_PER_MINUTE;
             break;
 
