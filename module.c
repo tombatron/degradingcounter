@@ -28,26 +28,33 @@ typedef struct DegradingCounterData {
 } DegradingCounterData;
 
 // This method will compute the degraded value of the counter.
-double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
+double DegradingCounter_Compute_Value(const DegradingCounterData *counter, RedisModuleCtx *ctx) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounter_Compute_Value");
+
     // Get current time stamp.
     const ustime_t current_time_ms = RedisModule_Milliseconds();
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "current_time_ms: %lld", current_time_ms);
 
     // Compute the difference. This will give us our age.
     const ustime_t age_in_milliseconds = current_time_ms - counter->created;
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "age_in_milliseconds: %lld = %lld (current_time_ms) - %lld (counter->created)", age_in_milliseconds, current_time_ms, counter->created);
 
     // Determine units per increment.
     long long units_per_increment = 0;
 
     switch (counter->increment) {
         case Milliseconds:
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Milliseconds");
             units_per_increment = MILLISECONDS_PER_MILLISECOND;
             break;
 
         case Seconds:
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Seconds");
             units_per_increment = MILLISECONDS_PER_SECOND;
             break;
 
         case Minutes:
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_NOTICE, "units_per_increment: Minutes");
             units_per_increment = MILLISECONDS_PER_MINUTE;
             break;
 
@@ -55,17 +62,22 @@ double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
             // Not sure how we got here, but we should just leave immediately.
             return 0;
     }
-
     // TODO: Add in some checks to ensure that we're not overflowing anywhere.
 
     // Compute the number of increments by dividing the age.
-    const long long number_of_increments = age_in_milliseconds / units_per_increment;
+    const long long number_of_increments = (age_in_milliseconds / units_per_increment) / counter->number_of_increments;
+
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "number_of_increments: %lld = (%lld (age_in_milliseconds) / %lld (units_per_increment)) / %d (counter->number_of_increments)", number_of_increments, age_in_milliseconds, units_per_increment, counter->number_of_increments);
 
     // Multiply the number of increments by how fast the counter is degrading to figure out degradation.
     const double degradation = (double)number_of_increments * counter->degrades_at;
 
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "degradation: %f = %f ((double)number_of_increments & %f (counter->degrades_at)", degradation, (double)number_of_increments, counter->degrades_at);
+
     // Subtract the degradation from the value. Clamp the value at zero.
     const double degraded_value = fmax(0, counter->value - degradation);
+
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] DegradingCounter_Compute_Value, Result: %f", degraded_value);
 
     // Return the result.
     return degraded_value;
@@ -73,16 +85,17 @@ double DegradingCounter_Compute_Value(const DegradingCounterData *counter) {
 
 char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counter) {
     char* buffer = RedisModule_Alloc(25);
+    const size_t buffer_len = sizeof(buffer);
 
     switch (counter->increment) {
         case Milliseconds:
-            snprintf(buffer, sizeof(buffer), "%dms", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%dms", counter->number_of_increments);
             break;
         case Seconds:
-            snprintf(buffer, sizeof(buffer), "%dsec", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%dsec", counter->number_of_increments);
             break;
         case Minutes:
-            snprintf(buffer, sizeof(buffer), "%dmin", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%dmin", counter->number_of_increments);
             break;
         default:
             return NULL;
@@ -91,26 +104,26 @@ char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counte
     return buffer;
 }
 
-int DegradingCounter_ParseIntervalString(const char *interval_str, int &number_of_increments, CounterIncrements &unit) {
+int DegradingCounter_ParseIntervalString(const char *interval_str, int *number_of_increments, CounterIncrements *unit) {
     char unit_str[4]; // This will hold the `min`, `sec`, `ms` component of the interval string.
 
-    if (sscanf(interval_str, "%d%4s", &number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
+    if (sscanf(interval_str, "%d%4s", number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
         // TODO: Maybe start caring?
         return -1;
     }
 
     if (strcmp(unit_str, "ms") == 0) {
-        unit = Milliseconds;
+        *unit = Milliseconds;
         return 0;
     }
 
     if (strcmp(unit_str, "sec") == 0) {
-        unit = Seconds;
+        *unit = Seconds;
         return 0;
     }
 
     if (strcmp(unit_str, "min") == 0) {
-        unit = Minutes;
+        *unit = Minutes;
         return 0;
     }
 
@@ -134,7 +147,9 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
     // be fine. So we'll loop over the arguments, which should have already been validated to ensure that exact six
     // were provided.
     // TODO: Should make sure AMOUNT, DEGRADE_RATE, and INTERVAL were each passed in.
-    for (int i = 2; i < 6; i += 2) { // Adding two so that the next index will reference a name.
+    // TODO: To support default arguments we're going to have to take in the arg count and use that as an upper bounds
+    //       instead of hard coding the 8 here.
+    for (int i = 2; i < 8; i += 2) { // Adding two so that the next index will reference a name.
         size_t arg_len;
         const char *arg_name = RedisModule_StringPtrLen(argv[i], &arg_len); // Doesn't need to be freed as it's handled by Redis.
 
@@ -162,8 +177,8 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
             const char *interval_str = RedisModule_StringPtrLen(argv[i + 1], &interval_len);
 
             if (DegradingCounter_ParseIntervalString(interval_str,
-                                                     degrading_counter_data->number_of_increments,
-                                                     degrading_counter_data->increment) != 0) {
+                                                     &degrading_counter_data->number_of_increments,
+                                                     &degrading_counter_data->increment) != 0) {
 
                 RedisModule_ReplyWithErrorFormat(ctx, "Err invalid value for INTERVAL: %s", interval_str);
                 RedisModule_Free(degrading_counter_data);
@@ -191,7 +206,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
 //                    Gonna set the rest of the properties.
 
 // DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 30min
-int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
     // TODO: Make some of these arguments optional.
     RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
 
@@ -227,7 +242,10 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
     }
 
     if (key_type == REDISMODULE_KEYTYPE_EMPTY) {
-        // We have a new key here. Let's persist and return the starting value.
+        // We have a new key here, let's set the created field.
+        degrading_counter_data->created = RedisModule_Milliseconds();
+
+        // Now let's persist and return the starting value.
         RedisModule_ModuleTypeSetValue(key, DegradingCounter, degrading_counter_data);
 
         // We're just going to return the initial value on first save.
@@ -244,7 +262,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         //       should go ahead and remove the key from the keyspace.
 
         // Next, let's compute how much of our counter has degraded.
-        const double degraded_counter_value = DegradingCounter_Compute_Value(stored_degrading_counter_data);
+        const double degraded_counter_value = DegradingCounter_Compute_Value(stored_degrading_counter_data, ctx);
 
         // Finally, return the degraded counter value.
         RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
@@ -317,7 +335,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         stored_degrading_counter_data->value = decremented_final_value;
 
         // We've decremented the value, now we have to compute.
-        decremented_final_value = DegradingCounter_Compute_Value(stored_degrading_counter_data);
+        decremented_final_value = DegradingCounter_Compute_Value(stored_degrading_counter_data, ctx);
     }
 
     // Mark the key ready to replicate to secondaries or to an AOF file...
@@ -359,7 +377,7 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     DegradingCounterData *stored_degraded_counter_data = RedisModule_ModuleTypeGetValue(key);
 
     // Let's compute the current value of the counter.
-    const double current_decremented_value = DegradingCounter_Compute_Value(stored_degraded_counter_data);
+    const double current_decremented_value = DegradingCounter_Compute_Value(stored_degraded_counter_data, ctx);
 
     if (current_decremented_value == 0) { // The counter value is at zero so we're going to get rid of it.
         RedisModule_UnlinkKey(key);
@@ -371,9 +389,9 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
 // ------- Native Type Callbacks.
 
 // Provided as the `rdb_load` callback for our data type.
-void *DegradingCounterRDBLoad(RedisModuleIO *io, int encver) {
+void *DegradingCounterRDBLoad(RedisModuleIO *io, int encoding_version) {
     // First we have to check if the encoding is the correct version.
-    if (encver != DEGRADING_COUNTER_ENCODING_VERSION) {
+    if (encoding_version != DEGRADING_COUNTER_ENCODING_VERSION) {
         // TODO: Log an error here.
         return NULL;
     }
@@ -390,7 +408,7 @@ void *DegradingCounterRDBLoad(RedisModuleIO *io, int encver) {
 }
 
 // Provided as the `rdb_save` callback for our data type.
-void *DegradingCounterRDBSave(RedisModuleIO *io, const void *ptr) {
+void DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
     const DegradingCounterData *degrading_counter_data = ptr;
 
     RedisModule_SaveSigned(io, degrading_counter_data->created);
@@ -398,19 +416,17 @@ void *DegradingCounterRDBSave(RedisModuleIO *io, const void *ptr) {
     RedisModule_SaveSigned(io, degrading_counter_data->number_of_increments);
     RedisModule_SaveSigned(io, degrading_counter_data->increment);
     RedisModule_SaveDouble(io, degrading_counter_data->value);
-
-    return REDISMODULE_OK;
 }
 
 // Provided as the `aof_rewrite` callback for our data type.
-void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, const void *value) {
+void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
     const DegradingCounterData *degrading_counter_data = value;
 
     // Call out to the DegradingCounter_Create_Interval_String method to formulate the command string. This method
     // allocates memory for the string, to be sure and free that memory after we're done here.
     char* interval_string = DegradingCounter_Create_Interval_String(degrading_counter_data);
 
-    RedisModule_EmitAOF(aof, "DC.INCR", "",
+    RedisModule_EmitAOF(aof, "DC.INCR", "ssdsdss",
                         key,
                         "AMOUNT", degrading_counter_data->value,
                         "DEGRADE_RATE", degrading_counter_data->degrades_at,
