@@ -209,7 +209,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
 // Increment counter (DC.INCR): Create counter if it doesn't exist increment by specified amount of values if it does.
 //                    Gonna set the rest of the properties.
 
-// DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 30min
+// DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 5sec
 int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
     // TODO: Make some of these arguments optional.
     RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
@@ -261,10 +261,9 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         // Next we'll check to see if the computed value of the existing key is zero.
         const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
 
-        if (is_approximately_zero(current_decremented_value, 0.001)) {
-            // The existing counter at this key is zero, so we'll just push the value from the provided arguments in
-            // and return...
-            *stored_degrading_counter_data = *degrading_counter_data;
+        if (is_approximately_zero(current_decremented_value, 1e-9)) {
+            stored_degrading_counter_data->value = degrading_counter_data->value;
+            stored_degrading_counter_data->created = RedisModule_Milliseconds();
 
             RedisModule_ReplyWithDouble(ctx, stored_degrading_counter_data->value);
         }
@@ -283,6 +282,8 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
             // Finally, return the degraded counter value.
             RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
         }
+
+        RedisModule_Free(degrading_counter_data);
     }
 
     // Mark the key ready to replicate to secondaries or to an AOF file...
@@ -343,7 +344,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
     double decremented_final_value = fmax(0, stored_degrading_counter_data->value - decrement_amount);
 
     // If decremented_final_value is 0, we're deleting the key.
-    if (decremented_final_value == 0) {
+    if (is_approximately_zero(decremented_final_value, 1e-9)) {
         RedisModule_UnlinkKey(key); // The value can't degrade anymore so we'll remove the method.
     }
     // Otherwise we update the value in memory.
@@ -363,6 +364,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 
 // Peek counter (DC.PEEK): look at the current value of the counter without incrementing it.
 int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounterPeek_RedisCommand");
     RedisModule_AutoMemory(ctx);
 
     if (argc != 2) { // We need a command name, obviously, but we also need a key name.
@@ -373,7 +375,7 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     RedisModuleString *key_name = argv[1];
 
     // Get a reference to the actual Redis key handle.
-    RedisModuleKey *key = RedisModule_OpenKey(ctx, key_name, REDISMODULE_READ);
+    RedisModuleKey *key = RedisModule_OpenKey(ctx, key_name, REDISMODULE_READ|REDISMODULE_WRITE);
 
     // Get the key type, this will let us know if we're dealing with an empty or invalid key.
     const int key_type = RedisModule_KeyType(key);
@@ -396,8 +398,12 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     // Let's compute the current value of the counter.
     const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degraded_counter_data);
 
-    if (current_decremented_value == 0) { // The counter value is at zero so we're going to get rid of it.
-        RedisModule_UnlinkKey(key);
+    if (is_approximately_zero(current_decremented_value, 1e-9)) { // The counter value is at zero so we're going to get rid of it
+        size_t len;
+        RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Key %s is approximately zero. Unlinking.", RedisModule_StringPtrLen(RedisModule_GetKeyNameFromModuleKey(key), &len));
+        const int unlink_result = RedisModule_UnlinkKey(key);
+        RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Unlink result %d", unlink_result);
+
     }
 
     return RedisModule_ReplyWithDouble(ctx, current_decremented_value);
