@@ -28,7 +28,7 @@ typedef struct DegradingCounterData {
 } DegradingCounterData;
 
 // This method will compute the degraded value of the counter.
-double DegradingCounter_Compute_Value(const DegradingCounterData *counter, RedisModuleCtx *ctx) {
+double DegradingCounter_Compute_Value(RedisModuleCtx *ctx, const DegradingCounterData *counter) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounter_Compute_Value");
 
     // Get current time stamp.
@@ -262,7 +262,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         //       should go ahead and remove the key from the keyspace.
 
         // Next, let's compute how much of our counter has degraded.
-        const double degraded_counter_value = DegradingCounter_Compute_Value(stored_degrading_counter_data, ctx);
+        const double degraded_counter_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
 
         // Finally, return the degraded counter value.
         RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
@@ -335,7 +335,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         stored_degrading_counter_data->value = decremented_final_value;
 
         // We've decremented the value, now we have to compute.
-        decremented_final_value = DegradingCounter_Compute_Value(stored_degrading_counter_data, ctx);
+        decremented_final_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
     }
 
     // Mark the key ready to replicate to secondaries or to an AOF file...
@@ -377,7 +377,7 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     DegradingCounterData *stored_degraded_counter_data = RedisModule_ModuleTypeGetValue(key);
 
     // Let's compute the current value of the counter.
-    const double current_decremented_value = DegradingCounter_Compute_Value(stored_degraded_counter_data, ctx);
+    const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degraded_counter_data);
 
     if (current_decremented_value == 0) { // The counter value is at zero so we're going to get rid of it.
         RedisModule_UnlinkKey(key);
