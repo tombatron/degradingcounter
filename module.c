@@ -10,6 +10,8 @@
 #define MILLISECONDS_PER_SECOND 1000
 #define MILLISECONDS_PER_MINUTE 60000
 
+#define CLOSE_ENOUGH_TO_ZERO 1e-9
+
 // This is a static global pointer to the custom type defined for the degrading counter.
 static RedisModuleType *DegradingCounter;
 
@@ -261,7 +263,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         // Next we'll check to see if the computed value of the existing key is zero.
         const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
 
-        if (is_approximately_zero(current_decremented_value, 1e-9)) {
+        if (is_approximately_zero(current_decremented_value, CLOSE_ENOUGH_TO_ZERO)) {
             stored_degrading_counter_data->value = degrading_counter_data->value;
             stored_degrading_counter_data->created = RedisModule_Milliseconds();
 
@@ -344,8 +346,8 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
     double decremented_final_value = fmax(0, stored_degrading_counter_data->value - decrement_amount);
 
     // If decremented_final_value is 0, we're deleting the key.
-    if (is_approximately_zero(decremented_final_value, 1e-9)) {
-        RedisModule_UnlinkKey(key); // The value can't degrade anymore so we'll remove the method.
+    if (is_approximately_zero(decremented_final_value, CLOSE_ENOUGH_TO_ZERO)) {
+        RedisModule_UnlinkKey(key); // The value can't degrade anymore so we'll remove it.
     }
     // Otherwise we update the value in memory.
     else {
@@ -398,12 +400,13 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     // Let's compute the current value of the counter.
     const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degraded_counter_data);
 
-    if (is_approximately_zero(current_decremented_value, 1e-9)) { // The counter value is at zero so we're going to get rid of it
+    if (is_approximately_zero(current_decremented_value, CLOSE_ENOUGH_TO_ZERO)) { // The counter value is at zero so we're going to get rid of it
+        // TODO: Clean this up, I don't like that we're executing code regardless of whether we actually log a value.
         size_t len;
+
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Key %s is approximately zero. Unlinking.", RedisModule_StringPtrLen(RedisModule_GetKeyNameFromModuleKey(key), &len));
         const int unlink_result = RedisModule_UnlinkKey(key);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Unlink result %d", unlink_result);
-
     }
 
     return RedisModule_ReplyWithDouble(ctx, current_decremented_value);
