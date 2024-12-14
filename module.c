@@ -10,6 +10,10 @@
 #define MILLISECONDS_PER_SECOND 1000
 #define MILLISECONDS_PER_MINUTE 60000
 
+#define MILLISECONDS_ABBREVIATION "ms"
+#define SECONDS_ABBREVIATION "sec"
+#define MINUTES_ABBREVIATION "min"
+
 #define CLOSE_ENOUGH_TO_ZERO 1e-9
 
 // This is a static global pointer to the custom type defined for the degrading counter.
@@ -95,13 +99,13 @@ char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counte
 
     switch (counter->increment) {
         case Milliseconds:
-            snprintf(buffer, buffer_len, "%dms", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%d%s", counter->number_of_increments, MILLISECONDS_ABBREVIATION);
             break;
         case Seconds:
-            snprintf(buffer, buffer_len, "%dsec", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%d%s", counter->number_of_increments, SECONDS_ABBREVIATION);
             break;
         case Minutes:
-            snprintf(buffer, buffer_len, "%dmin", counter->number_of_increments);
+            snprintf(buffer, buffer_len, "%d%s", counter->number_of_increments, MINUTES_ABBREVIATION);
             break;
         default:
             return NULL;
@@ -213,7 +217,6 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
 
 // DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 5sec
 int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
-    // TODO: Make some of these arguments optional.
     RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
 
     // For now all arguments are required, we'll pass back an error in the event that 6 arguments weren't
