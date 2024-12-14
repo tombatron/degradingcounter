@@ -28,6 +28,12 @@
     <None Update="degrading-counter.so">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <None Update="Dockerfile">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="start_valgrind.sh">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>        
   </ItemGroup>
 
 </Project>
