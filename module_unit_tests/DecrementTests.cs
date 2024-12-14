@@ -1,4 +1,3 @@
-using System.Reflection;
 using StackExchange.Redis;
 
 namespace module_unit_tests;
