@@ -1,5 +1,4 @@
 using StackExchange.Redis;
-using static module_unit_tests.TestUtilities;
 
 namespace module_unit_tests;
 
@@ -18,7 +17,7 @@ public class IncrementTests(RedisContainerFixture redisFixture)
 
         var testKey = CreateTestKey();
         
-        var result = await _redis.ExecuteAsync("DC.INCR", testKey, "AMOUNT", amount, "DEGRADE_RATE", 1.0, "INTERVAL", $"5{timeUnit}");
+        var result = await _redis.ExecuteAsync(ModuleCommand.Increment, testKey, "AMOUNT", amount, "DEGRADE_RATE", 1.0, "INTERVAL", $"5{timeUnit}");
 
         Assert.NotNull(result);
         Assert.Equal(amount, (double)result);
@@ -39,7 +38,7 @@ public class IncrementTests(RedisContainerFixture redisFixture)
 
             expectedTotalAmount += randomAmount;
 
-            actualValue = (double)(await _redis.ExecuteAsync("DC.INCR", testKey, "AMOUNT", randomAmount, "DEGRADE_RATE", 1.0,
+            actualValue = (double)(await _redis.ExecuteAsync(ModuleCommand.Increment, testKey, "AMOUNT", randomAmount, "DEGRADE_RATE", 1.0,
                 "INTERVAL", $"6{timeUnit}"));
         }
         
