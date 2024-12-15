@@ -1,0 +1,39 @@
+name: Build and Test the Degrading Counter Redis Module
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the project repository.
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Clone Redis's GitHub Repository, we need the module SDK...
+      - name: Clone Redis Repository
+        run: |
+          git clone https://github.com/redis/redis.git redis-sdk
+          cd redis-sdk
+          git checkout stable # Use the stable branch for compatibility
+
+      # Install Dependencies and Tools
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make
+
+      # Install .NET 8.0 SDK
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      # Build Module and Run Tests
+      - name: Build Module and Run Tests
+        run: ./run_tests.sh
