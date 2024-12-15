@@ -38,8 +38,8 @@ int is_approximately_zero(const double value, const double epsilon) {
 }
 
 // This method will compute the degraded value of the counter.
-double DegradingCounter_Compute_Value(RedisModuleCtx *ctx, const DegradingCounterData *counter) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounter_Compute_Value");
+double degrading_counter_compute_value(RedisModuleCtx *ctx, const DegradingCounterData *counter) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] degrading_counter_compute_value");
 
     // Get current time stamp.
     const ustime_t current_time_ms = RedisModule_Milliseconds();
@@ -87,13 +87,13 @@ double DegradingCounter_Compute_Value(RedisModuleCtx *ctx, const DegradingCounte
     // Subtract the degradation from the value. Clamp the value at zero.
     const double degraded_value = fmax(0, counter->value - degradation);
 
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] DegradingCounter_Compute_Value, Result: %f", degraded_value);
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] degrading_counter_compute_value, Result: %f", degraded_value);
 
     // Return the result.
     return degraded_value;
 }
 
-char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counter) {
+char* degrading_counter_create_interval_string(const DegradingCounterData *counter) {
     char* buffer = RedisModule_Alloc(25);
     const size_t buffer_len = sizeof(buffer);
 
@@ -114,7 +114,7 @@ char* DegradingCounter_Create_Interval_String(const DegradingCounterData *counte
     return buffer;
 }
 
-int DegradingCounter_ParseIntervalString(const char *interval_str, int *number_of_increments, CounterIncrements *unit) {
+int degrading_counter_parse_interval_string(const char *interval_str, int *number_of_increments, CounterIncrements *unit) {
     char unit_str[4]; // This will hold the `min`, `sec`, `ms` component of the interval string.
 
     if (sscanf(interval_str, "%d%4s", number_of_increments, unit_str) != 2) { // NOLINT(*-err34-c), At this point I don't care why parsing failed.
@@ -142,13 +142,15 @@ int DegradingCounter_ParseIntervalString(const char *interval_str, int *number_o
 }
 
 // Create a struct of type DegradingCounterData and populate it from the arguments passed into the Redis command.
-DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* ctx, RedisModuleString **argv) {
+DegradingCounterData* get_degrading_counter_data_from_redis_arguments(RedisModuleCtx* ctx, RedisModuleString **argv) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] get_degrading_counter_data_from_redis_arguments");
     // This method is intended to be called from within a context that has already checked the number of arguments.
 
     // Let's start by having Redis allocate enough memory for us to store would DegradingCounterData struct. Allocating
     // the memory this way let's Redis correctly report how much memory it's using.
     // TODO: Check to ensure that the memory was allocated successfully.
     DegradingCounterData *degrading_counter_data = RedisModule_Alloc(sizeof(DegradingCounterData));
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Allocated %d bytes for an instance of DegradingCounterData.", sizeof(DegradingCounterData));
 
     // Now that the memory for the degrading_counter_data struct instance is allocated we'll go and parse the arguments and
     // hopefully return a pointer to the struct containing the data we want to work with.
@@ -159,6 +161,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
     // TODO: Should make sure AMOUNT, DEGRADE_RATE, and INTERVAL were each passed in.
     // TODO: To support default arguments we're going to have to take in the arg count and use that as an upper bounds
     //       instead of hard coding the 8 here.
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Parsing command arguments.");
     for (int i = 2; i < 8; i += 2) { // Adding two so that the next index will reference a name.
         size_t arg_len;
         const char *arg_name = RedisModule_StringPtrLen(argv[i], &arg_len); // Doesn't need to be freed as it's handled by Redis.
@@ -170,6 +173,8 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
                 RedisModule_Free(degrading_counter_data);
                 return NULL;
             }
+
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Handling `AMOUNT`, parsed: %f", degrading_counter_data->value);
         }
 
         // Check `DEGRADE_RATE`
@@ -179,14 +184,18 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
                 RedisModule_Free(degrading_counter_data);
                 return NULL;
             }
+
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Handling `DEGRADE_RATE`, parsed: %f", degrading_counter_data->degrades_at);
         }
 
         // Check `INTERVAL`
         else if (strcmp(arg_name, "INTERVAL") == 0) {
             size_t interval_len;
+            // `interval_str` shouldn't need to be freed as we're creating it via `RedisModule_StringPtrLen` which is returning
+            // a pointing to an internal buffer managed by Redis.
             const char *interval_str = RedisModule_StringPtrLen(argv[i + 1], &interval_len);
 
-            if (DegradingCounter_ParseIntervalString(interval_str,
+            if (degrading_counter_parse_interval_string(interval_str,
                                                      &degrading_counter_data->number_of_increments,
                                                      &degrading_counter_data->increment) != 0) {
 
@@ -194,6 +203,8 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
                 RedisModule_Free(degrading_counter_data);
                 return NULL;
             }
+
+            RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Handling `INTERVAL` as occurring every %d '%s'", degrading_counter_data->number_of_increments, interval_str);
         }
 
         // Got something else...
@@ -204,6 +215,8 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
             return NULL; // There is nothing to return. This will be handled by the caller.
         }
     }
+
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] get_degrading_counter_data_from_redis_arguments");
 
     // We've made it this far... I'm assuming that there are no issues so we're going to return the pointer to the
     // caller, where we expect the instance of the struct to be used and then freed.
@@ -216,7 +229,7 @@ DegradingCounterData* GetDegradingCounterDataFromRedisArguments(RedisModuleCtx* 
 //                    Gonna set the rest of the properties.
 
 // DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 5sec
-int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
+int degrading_counter_increment_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
     RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
 
     // For now all arguments are required, we'll pass back an error in the event that 6 arguments weren't
@@ -242,7 +255,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
     }
 
     // Next, if possible, let's parse the args passed into the Redis command and see what we have.
-    DegradingCounterData *degrading_counter_data = GetDegradingCounterDataFromRedisArguments(ctx, argv);
+    DegradingCounterData *degrading_counter_data = get_degrading_counter_data_from_redis_arguments(ctx, argv);
 
     // If `degrading_counter_data` is NULL here, there was an error parsing the values and we should just bail out.
     if (degrading_counter_data == NULL) {
@@ -264,7 +277,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         DegradingCounterData *stored_degrading_counter_data = RedisModule_ModuleTypeGetValue(key);
 
         // Next we'll check to see if the computed value of the existing key is zero.
-        const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
+        const double current_decremented_value = degrading_counter_compute_value(ctx, stored_degrading_counter_data);
 
         if (is_approximately_zero(current_decremented_value, CLOSE_ENOUGH_TO_ZERO)) {
             stored_degrading_counter_data->value = degrading_counter_data->value;
@@ -282,7 +295,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
             //       should go ahead and remove the key from the keyspace.
 
             // Next, let's compute how much of our counter has degraded.
-            const double degraded_counter_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
+            const double degraded_counter_value = degrading_counter_compute_value(ctx, stored_degrading_counter_data);
 
             // Finally, return the degraded counter value.
             RedisModule_ReplyWithDouble(ctx, degraded_counter_value);
@@ -299,7 +312,7 @@ int DegradingCounterIncrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 
 // Decrement counter (DC.DECR): Provide a way for a user to decrement a counter.
 // DC.DECR test_counter 1
-int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int degrading_counter_decrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
 
     if (argc > 3) { // 1 optional user supplied argument, plus the command name and the key name.
@@ -358,7 +371,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
         stored_degrading_counter_data->value = decremented_final_value;
 
         // We've decremented the value, now we have to compute.
-        decremented_final_value = DegradingCounter_Compute_Value(ctx, stored_degrading_counter_data);
+        decremented_final_value = degrading_counter_compute_value(ctx, stored_degrading_counter_data);
     }
 
     // Mark the key ready to replicate to secondaries or to an AOF file...
@@ -368,7 +381,7 @@ int DegradingCounterDecrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStrin
 }
 
 // Peek counter (DC.PEEK): look at the current value of the counter without incrementing it.
-int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int degrading_counter_peek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounterPeek_RedisCommand");
     RedisModule_AutoMemory(ctx);
 
@@ -401,7 +414,7 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
     DegradingCounterData *stored_degraded_counter_data = RedisModule_ModuleTypeGetValue(key);
 
     // Let's compute the current value of the counter.
-    const double current_decremented_value = DegradingCounter_Compute_Value(ctx, stored_degraded_counter_data);
+    const double current_decremented_value = degrading_counter_compute_value(ctx, stored_degraded_counter_data);
 
     if (is_approximately_zero(current_decremented_value, CLOSE_ENOUGH_TO_ZERO)) { // The counter value is at zero so we're going to get rid of it
         // TODO: Clean this up, I don't like that we're executing code regardless of whether we actually log a value.
@@ -418,7 +431,7 @@ int DegradingCounterPeek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **a
 // ------- Native Type Callbacks.
 
 // Provided as the `rdb_load` callback for our data type.
-void *DegradingCounterRDBLoad(RedisModuleIO *io, int encoding_version) {
+void *degrading_counter_rdb_load(RedisModuleIO *io, int encoding_version) {
     // First we have to check if the encoding is the correct version.
     if (encoding_version != DEGRADING_COUNTER_ENCODING_VERSION) {
         // TODO: Log an error here.
@@ -437,7 +450,7 @@ void *DegradingCounterRDBLoad(RedisModuleIO *io, int encoding_version) {
 }
 
 // Provided as the `rdb_save` callback for our data type.
-void DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
+void degrading_counter_rdb_save(RedisModuleIO *io, void *ptr) {
     const DegradingCounterData *degrading_counter_data = ptr;
 
     RedisModule_SaveSigned(io, degrading_counter_data->created);
@@ -448,12 +461,12 @@ void DegradingCounterRDBSave(RedisModuleIO *io, void *ptr) {
 }
 
 // Provided as the `aof_rewrite` callback for our data type.
-void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
+void degrading_counter_aof_rewrite(RedisModuleIO *aof, RedisModuleString *key, void *value) {
     const DegradingCounterData *degrading_counter_data = value;
 
     // Call out to the DegradingCounter_Create_Interval_String method to formulate the command string. This method
     // allocates memory for the string, to be sure and free that memory after we're done here.
-    char* interval_string = DegradingCounter_Create_Interval_String(degrading_counter_data);
+    char* interval_string = degrading_counter_create_interval_string(degrading_counter_data);
 
     RedisModule_EmitAOF(aof, "DC.INCR", "ssdsdss",
                         key,
@@ -466,7 +479,7 @@ void DegradingCounterAOFRewrite(RedisModuleIO *aof, RedisModuleString *key, void
 }
 
 // Provided as the `free` callback for our data type.
-void DegradingCounterFree(void *value) {
+void degrading_counter_free(void *value) {
     // This should suffice as our data type doesn't require a complex structure.
     RedisModule_Free(value);
 }
@@ -478,10 +491,10 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
 
     RedisModuleTypeMethods tm = {
         .version = REDISMODULE_TYPE_METHOD_VERSION,
-        .rdb_load = DegradingCounterRDBLoad,
-        .rdb_save = DegradingCounterRDBSave,
-        .aof_rewrite = DegradingCounterAOFRewrite,
-        .free = DegradingCounterFree
+        .rdb_load = degrading_counter_rdb_load,
+        .rdb_save = degrading_counter_rdb_save,
+        .aof_rewrite = degrading_counter_aof_rewrite,
+        .free = degrading_counter_free
     };
 
     DegradingCounter = RedisModule_CreateDataType(ctx,
@@ -494,17 +507,17 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx) {
     }
 
     if (RedisModule_CreateCommand(ctx, "dc.incr",
-        DegradingCounterIncrement_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
+        degrading_counter_increment_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
         return REDISMODULE_ERR;
     }
 
     if (RedisModule_CreateCommand(ctx, "dc.decr",
-        DegradingCounterDecrement_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
+        degrading_counter_decrement_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
         return REDISMODULE_ERR;
     }
 
     if (RedisModule_CreateCommand(ctx, "dc.peek",
-        DegradingCounterPeek_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
+        degrading_counter_peek_RedisCommand,"fast write", 1, 1, 1) == REDISMODULE_ERR) {
         return REDISMODULE_ERR;
     }
 
