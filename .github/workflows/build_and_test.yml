@@ -20,7 +20,7 @@ jobs:
         run: |
           git clone https://github.com/redis/redis.git redis-sdk
           cd redis-sdk
-          git checkout stable # Use the stable branch for compatibility
+          git checkout 7.4.1 # Use the stable branch for compatibility
 
       # Install Dependencies and Tools
       - name: Install Dependencies
