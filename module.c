@@ -230,6 +230,7 @@ DegradingCounterData* get_degrading_counter_data_from_redis_arguments(RedisModul
 
 // DC.INCR test_counter AMOUNT 1 DEGRADE_RATE 1.0 INTERVAL 5sec
 int degrading_counter_increment_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, const int argc) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] (DC.INCR) degrading_counter_increment_RedisCommand");
     RedisModule_AutoMemory(ctx); // Enable the use of automatic memory management.
 
     // For now all arguments are required, we'll pass back an error in the event that 6 arguments weren't
@@ -307,12 +308,15 @@ int degrading_counter_increment_RedisCommand(RedisModuleCtx *ctx, RedisModuleStr
     // Mark the key ready to replicate to secondaries or to an AOF file...
     RedisModule_ReplicateVerbatim(ctx);
 
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] (DC.INCR) degrading_counter_increment_RedisCommand");
+
     return REDISMODULE_OK;
 }
 
 // Decrement counter (DC.DECR): Provide a way for a user to decrement a counter.
 // DC.DECR test_counter 1
 int degrading_counter_decrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] (DC.DECR) degrading_counter_decrement_RedisCommand");
     RedisModule_AutoMemory(ctx);
 
     if (argc > 3) { // 1 optional user supplied argument, plus the command name and the key name.
@@ -377,12 +381,14 @@ int degrading_counter_decrement_RedisCommand(RedisModuleCtx *ctx, RedisModuleStr
     // Mark the key ready to replicate to secondaries or to an AOF file...
     RedisModule_ReplicateVerbatim(ctx);
 
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Finishing] (DC.DECR) degrading_counter_decrement_RedisCommand");
+
     return RedisModule_ReplyWithDouble(ctx, decremented_final_value);
 }
 
 // Peek counter (DC.PEEK): look at the current value of the counter without incrementing it.
 int degrading_counter_peek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] DegradingCounterPeek_RedisCommand");
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] (DC.PEEK) degrading_counter_peek_RedisCommand");
     RedisModule_AutoMemory(ctx);
 
     if (argc != 2) { // We need a command name, obviously, but we also need a key name.
@@ -424,6 +430,8 @@ int degrading_counter_peek_RedisCommand(RedisModuleCtx *ctx, RedisModuleString *
         const int unlink_result = RedisModule_UnlinkKey(key);
         RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Unlink result %d", unlink_result);
     }
+
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "[Starting] (DC.PEEK) degrading_counter_peek_RedisCommand");
 
     return RedisModule_ReplyWithDouble(ctx, current_decremented_value);
 }
