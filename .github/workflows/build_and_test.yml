@@ -36,7 +36,7 @@ jobs:
         run: ls -l
 
       - name: Build Module
-        run: make REDIS_SRC=./redis-sdk
+        run: make REDIS_SRC=redis-sdk
 
       - name: Copy Compiled Module
         run: cp degrading-counter.so module_unit_tests/.
