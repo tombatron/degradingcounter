@@ -1,4 +1,4 @@
-#!/usr/bin/zsh
+#!/usr/bin/bash
 make build
 
 cp degrading-counter.so module_unit_tests
