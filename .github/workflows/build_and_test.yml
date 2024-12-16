@@ -22,18 +22,22 @@ jobs:
           cd redis-sdk
           git checkout 7.4.1 # Use the stable branch for compatibility
 
-      # Install Dependencies and Tools
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc make
 
-      # Install .NET 8.0 SDK
       - name: Install .NET 8 SDK
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # Build Module and Run Tests
-      - name: Build Module and Run Tests
-        run: ./run_tests.sh
+      - name: Build Module
+        run: make REDIS_SRC=./redis-sdk
+
+      - name: Copy Compiled Module
+        run: cp degrading-counter.so module_unit_tests/.
+
+      - name: Run Tests
+        run: dotnet test module_unit_tests/module_unit_tests.csproj
+
