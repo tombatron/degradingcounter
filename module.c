@@ -150,7 +150,7 @@ DegradingCounterData* get_degrading_counter_data_from_redis_arguments(RedisModul
     // the memory this way let's Redis correctly report how much memory it's using.
     // TODO: Check to ensure that the memory was allocated successfully.
     DegradingCounterData *degrading_counter_data = RedisModule_Alloc(sizeof(DegradingCounterData));
-    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Allocated %d bytes for an instance of DegradingCounterData.", sizeof(DegradingCounterData));
+    RedisModule_Log(ctx, REDISMODULE_LOGLEVEL_DEBUG, "Allocated %ld bytes for an instance of DegradingCounterData.", sizeof(DegradingCounterData));
 
     // Now that the memory for the degrading_counter_data struct instance is allocated we'll go and parse the arguments and
     // hopefully return a pointer to the struct containing the data we want to work with.

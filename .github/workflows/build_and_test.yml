@@ -11,11 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the project repository.
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      # Clone Redis's GitHub Repository, we need the module SDK...
       - name: Clone Redis Repository
         run: |
           git clone https://github.com/redis/redis.git redis-sdk
