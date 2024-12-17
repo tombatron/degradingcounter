@@ -18,7 +18,7 @@ jobs:
         run: |
           git clone https://github.com/redis/redis.git redis-sdk
           cd redis-sdk
-          git checkout 7.4.1 # Use the stable branch for compatibility
+          git checkout 7.4.1
 
       - name: Install Dependencies
         run: |
@@ -29,9 +29,6 @@ jobs:
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
-
-      - name: What
-        run: ls -l
 
       - name: Build Module
         run: make REDIS_SRC=./redis-sdk/src
